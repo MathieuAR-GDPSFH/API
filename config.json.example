@@ -1,0 +1,14 @@
+{
+	"mysql": {
+		"host": "127.0.0.1",
+		"username": "root",
+		"password": "",
+		"database": "gdpsfh"
+	},
+	"clientId": "881228402722500659",
+	"clientSecret": "UtMfQnAmhiHSR9genjg34w_SacDjs6Jz",
+	"redirect_uri": "http://localhost/auth/auth.php",
+	"port": 30458,
+	"bot_token": "Nzk4NTEyMjkwMjIyODMzNjY0.X_2GhQ.OO26glr3tUyVpmPH-7Hb1Dhq4Gs",
+	"allow_origin": "*"
+}

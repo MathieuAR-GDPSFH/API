@@ -533,14 +533,6 @@ app.get("/getgdpspassword", async (req, res) => {
         }
     }
 
-    if (gdps_infos.length === 0) {
-        res.send({
-            success: false,
-            message: "This gdps doesn't exist."
-        })
-        return
-    }
-
     res.send({
         success: true,
         password: gdps_infos["password"]

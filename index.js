@@ -134,6 +134,16 @@ app.get("/page/dashboard", async (req, res) => {
 
 app.get("/page/mygdps", async (req, res) => {
     const user_id = req.query["user_id"]
+    const access_token = req.query["access_token"]
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
 
     const gdps_list = []
     const owned_gdps = await query("select id,name,created_on,status from gdps where owner_id = ?", [user_id])
@@ -182,11 +192,22 @@ app.get("/page/mygdps", async (req, res) => {
 
 app.get("/page/gdps/management", async (req, res) => {
     const gdps_id = req.query["gdps_id"]
+    const user_id = req.query["user_id"]
+    const access_token = req.query["access_token"]
 
     if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
 
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
     const subusers = []
-    const sql_subusers = await query("select user_id,perm_all,perm_levels,perm_mappacks,perm_gauntlets,perm_quests,perm_users from subusers where gdps_id = ?", [gdps_id])
+    const sql_subusers = await query("select user_id,perm_all,perm_management,perm_levels,perm_mappacks,perm_gauntlets,perm_quests,perm_users,perm_managemods,perm_seesentlevels,perm_seemodactions from subusers where gdps_id = ?", [gdps_id])
     for (const subuser of sql_subusers) {
         const user_data = {
             user_id: subuser["user_id"],
@@ -210,6 +231,12 @@ app.get("/page/gdps/management", async (req, res) => {
                             color: "danger"
                         })
                         break perm_loop
+                    } case "perm_management": {
+                        user_data["permissions"].push({
+                            name: "Management page",
+                            color: "danger"
+                        })
+                        break
                     } case "perm_levels": {
                         user_data["permissions"].push({
                             name: "Levels",
@@ -237,6 +264,24 @@ app.get("/page/gdps/management", async (req, res) => {
                     } case "perm_users": {
                         user_data["permissions"].push({
                             name: "Users",
+                            color: "success"
+                        })
+                        break
+                    } case "perm_managemods": {
+                        user_data["permissions"].push({
+                            name: "Manage moderators",
+                            color: "danger"
+                        })
+                        break
+                    } case "perm_seesentlevels": {
+                        user_data["permissions"].push({
+                            name: "See sent levels",
+                            color: "success"
+                        })
+                        break
+                    } case "perm_seemodactions": {
+                        user_data["permissions"].push({
+                            name: "See mod actions",
                             color: "success"
                         })
                         break
@@ -303,7 +348,17 @@ app.post("/creategdps", async (req, res) => {
     const custom_url = req.query["custom-url"]
     const version = req.query["version"]
     const user_id = req.query["user_id"]
+    const access_token = req.query["access_token"]
     const password = generate_pass()
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
 
     let user_data = await query("select premium,gdps_limit from discord_oauth where user_id = ?", [user_id])
     if (user_data.length === 0) {
@@ -492,6 +547,87 @@ app.get("/getgdpspassword", async (req, res) => {
     })
 })
 
+app.get("/status", async (req, res) => {
+    res.status(200)
+    res.send("ok")
+})
+
+app.all("/addsubuser", async (req, res) => {
+    const access_token = req.body["access_token"]
+    const user_id = req.body["user_id"]
+    const gdps_id = req.body["gdps_id"]
+    const subuser_id = req.body["subuser_id"]
+    const allPerms = req.body["allPerms"]
+    const managementPerm = req.body["managementPerm"]
+    const manageLevels = req.body["manageLevels"]
+    const manageMapPacks = req.body["manageMapPacks"]
+    const manageGauntlets = req.body["manageGauntlets"]
+    const manageQuests = req.body["manageQuests"]
+    const manageUsers = req.body["manageUsers"]
+    const manageModerators = req.body["manageModerators"]
+    const seeSentLevels = req.body["seeSentLevels"]
+    const seeModActions = req.body["seeModActions"]
+    res.set("Access-Control-Allow-Origin", config.allow_origin);
+    res.set("Access-Control-Allow-Headers", config.allow_origin);
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (user_id === subuser_id) {res.send({ success: false, message: "You can't add yourself as a subuser.." }); return}
+    if (subuser_id === undefined || subuser_id === "") {res.send({ success: false, message: "Subuser id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+    if (!Number.isInteger(allPerms) || allPerms > 1 || allPerms < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(managementPerm) || managementPerm > 1 || managementPerm < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(manageLevels) || manageLevels > 1 || manageLevels < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(manageMapPacks) || manageMapPacks > 1 || manageMapPacks < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(manageGauntlets) || manageGauntlets > 1 || manageGauntlets < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(manageQuests) || manageQuests > 1 || manageQuests < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(manageUsers) || manageUsers > 1 || manageUsers < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(manageModerators) || manageModerators > 1 || manageModerators < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(seeSentLevels) || seeSentLevels > 1 || seeSentLevels < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(seeModActions) || seeModActions > 1 || seeModActions < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    const own_gdps = await query("select null from gdps where id = ? and owner_id = ?", [gdps_id ,user_id])
+    if (own_gdps.length === 0) {
+        res.send({
+            success: false,
+            message: "You can't add subusers on this GDPS."
+        })
+        return
+    }
+
+    const user_exist_check = await query("select null from discord_oauth where user_id = ?", [user_id])
+    if (user_exist_check.length === 0) {
+        res.send({
+            success: false,
+            message: "This user doesn't have an account on GDPSFH."
+        })
+        return
+    }
+
+    const user_check = await query("select null from subusers where gdps_id = ? and user_id = ?", [gdps_id, subuser_id])
+    if (user_check.length > 0) {
+        res.send({
+            success: false,
+            message: "This user is already a subuser."
+        })
+        return
+    }
+
+    await query("insert into subusers (gdps_id,user_id,perm_all,perm_management,perm_levels,perm_mappacks,perm_gauntlets,perm_quests,perm_users,perm_managemods,perm_seesentlevels,perm_seemodactions) values (?,?,?,?,?,?,?,?,?,?,?,?)", [gdps_id, subuser_id, allPerms, managementPerm, manageLevels, manageMapPacks, manageGauntlets, manageQuests, manageUsers, manageModerators, seeSentLevels, seeModActions])
+    res.send({
+        success: true
+    })
+})
+
 async function is_token_valid(user_id, token) {
     const check = await query("select null from discord_oauth where user_id = ? and access_token = ?", [user_id, token])
     if (check.length === 0) {
@@ -507,6 +643,6 @@ function generate_pass() {
     return first + second;
 };
 
-app.listen(config.port, "localhost", async function () {
+app.listen(config.port, async function () {
     console.log("[API] Started!")
 })

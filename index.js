@@ -107,6 +107,7 @@ app.post("/discord/oauth/code", async (req, res) => {
     }
 
     res.send(req_response)
+    console.log(`User ${user_data["username"]} just logged in.`)
 })
 
 app.get("/page/dashboard", async (req, res) => {
@@ -478,11 +479,13 @@ app.post("/creategdps", async (req, res) => {
 
     res.send({success: true})
 
+    console.log(`Creating a new GDPS named ${name}.`)
     await createGDPS(custom_url, name, version, password, query)
     await exec(`ln -s /home/gdps/nginx_configs/${custom_url}.conf /etc/nginx/sites-enabled/`)
     await exec("service nginx reload")
     await exec("service php7.4-fpm reload")
     await query("update gdps set status = 1 where id = ?", [gdps.insertId])
+    console.log(`Finished the creation of the GDPS named ${name}.`)
 })
 
 app.post("/createdl", async (req, res) => {
@@ -553,6 +556,7 @@ app.get("/getgdpspassword", async (req, res) => {
         success: true,
         password: gdps_infos["password"]
     })
+    console.log(`User ${user_id} copied the password of a GDPS with the id ${gdps_id}.`)
 })
 
 app.get("/status", async (req, res) => {
@@ -653,6 +657,7 @@ app.all("/addsubuser", async (req, res) => {
     res.send({
         success: true
     })
+    console.log(`${user_id} added ${subuser_id} as a subuser on the GDPS with the id ${gdps_id}.`)
 })
 
 app.all("/deletesubuser", async (req, res) => {
@@ -699,6 +704,7 @@ app.all("/deletesubuser", async (req, res) => {
     res.send({
         success: true
     })
+    console.log(`${user_id} removed the subuser ${subuser_id} on the GDPS with the id ${gdps_id}.`)
 })
 
 async function is_token_valid(user_id, token) {

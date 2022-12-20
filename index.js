@@ -77,21 +77,36 @@ app.post("/discord/oauth/code", async (req, res) => {
     }
 
     const avatar = `https://cdn.discordapp.com/avatars/${user_data["id"]}/${user_data["avatar"]}`
-    const access_token = crypto.randomBytes(64).toString('hex');
-    res.send({
+    const access_token = crypto.randomBytes(64).toString('hex')
+
+    const req_response = {
         user_id: user_data["id"],
         username: user_data["username"],
         avatar: avatar,
-        access_token: access_token
-    })
+        access_token: access_token,
+        staff_permissions: []
+    }
 
-    var sql_data = await query("select name,avatar from discord_oauth where user_id = ?", [user_data["id"]])
+    var sql_data = await query("select role from discord_oauth where user_id = ?", [user_data["id"]])
     if (sql_data.length === 0) {
         const current_time = Math.floor(Date.now() / 1000)
         await query("insert into discord_oauth (user_id,name,avatar,token,token_expire,refresh_token,created_on,access_token) values (?,?,?,?,?,?,?,?)", [user_data["id"], user_data["username"], avatar, oauth_data["access_token"], current_time + oauth_data["expires_in"], oauth_data["refresh_token"], current_time, access_token])
     } else if (sql_data.length === 1) {
         await query("update discord_oauth set name = ?, avatar = ?, access_token = ? where user_id = ?", [user_data["username"], avatar, access_token, user_data["id"]])
+
+        sql_data = sql_data[0]
+        if (sql_data["role"] !== 0) {
+            let role_perms = await query("select see_allgdps,see_allusers from roles where id = ?", [sql_data["role"]])
+            role_perms = role_perms[0]
+            for (const role in role_perms) {
+                if (role_perms[role] === 1) {
+                    req_response["staff_permissions"].push(role)
+                }
+            }
+        }
     }
+
+    res.send(req_response)
 })
 
 app.get("/page/dashboard", async (req, res) => {
@@ -214,6 +229,7 @@ app.get("/page/gdps/management", async (req, res) => {
             user_name: "No name set",
             permissions: []
         }
+        console.log(subuser["user_id"])
 
         const user_name = await query("select name from discord_oauth where user_id = ?", [subuser["user_id"]])
         if (user_name[0]["name"] !== "") {
@@ -587,7 +603,26 @@ app.all("/addsubuser", async (req, res) => {
         return
     }
 
-    const own_gdps = await query("select null from gdps where id = ? and owner_id = ?", [gdps_id ,user_id])
+    if (
+        allPerms === 0 &&
+        managementPerm === 0 &&
+        manageLevels === 0 &&
+        manageMapPacks === 0 &&
+        manageGauntlets === 0 &&
+        manageQuests === 0 &&
+        manageUsers === 0 &&
+        manageModerators === 0 &&
+        seeSentLevels === 0 &&
+        seeModActions === 0
+    ) {
+        res.send({
+            success: false,
+            message: "You need to select at least one permission."
+        })
+        return
+    }
+
+    const own_gdps = await query("select null from gdps where id = ? and owner_id = ?", [gdps_id, user_id])
     if (own_gdps.length === 0) {
         res.send({
             success: false,
@@ -596,7 +631,7 @@ app.all("/addsubuser", async (req, res) => {
         return
     }
 
-    const user_exist_check = await query("select null from discord_oauth where user_id = ?", [user_id])
+    const user_exist_check = await query("select null from discord_oauth where user_id = ?", [subuser_id])
     if (user_exist_check.length === 0) {
         res.send({
             success: false,
@@ -615,6 +650,52 @@ app.all("/addsubuser", async (req, res) => {
     }
 
     await query("insert into subusers (gdps_id,user_id,perm_all,perm_management,perm_levels,perm_mappacks,perm_gauntlets,perm_quests,perm_users,perm_managemods,perm_seesentlevels,perm_seemodactions) values (?,?,?,?,?,?,?,?,?,?,?,?)", [gdps_id, subuser_id, allPerms, managementPerm, manageLevels, manageMapPacks, manageGauntlets, manageQuests, manageUsers, manageModerators, seeSentLevels, seeModActions])
+    res.send({
+        success: true
+    })
+})
+
+app.all("/deletesubuser", async (req, res) => {
+    const access_token = req.body["access_token"]
+    const user_id = req.body["user_id"]
+    const gdps_id = req.body["gdps_id"]
+    const subuser_id = req.body["subuser_id"]
+    res.set("Access-Control-Allow-Origin", config.allow_origin);
+    res.set("Access-Control-Allow-Headers", config.allow_origin);
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (subuser_id === undefined || subuser_id === "") {res.send({ success: false, message: "Subuser id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    const own_gdps = await query("select null from gdps where id = ? and owner_id = ?", [gdps_id, user_id])
+    if (own_gdps.length === 0) {
+        res.send({
+            success: false,
+            message: "You can't remove subusers on this GDPS."
+        })
+        return
+    }
+
+    const user_exist_check = await query("select null from discord_oauth where user_id = ?", [subuser_id])
+    if (user_exist_check.length === 0) {
+        res.send({
+            success: false,
+            message: "This user doesn't have an account on GDPSFH."
+        })
+        return
+    }
+
+    await query("delete from subusers where gdps_id = ? and user_id = ?", [gdps_id, subuser_id])
     res.send({
         success: true
     })

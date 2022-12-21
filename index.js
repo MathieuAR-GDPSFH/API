@@ -8,7 +8,7 @@ const dedent = require('dedent')
 const fs = require("fs")
 const crypto = require('crypto')
 const exec = util.promisify(require("child_process").exec);
-const { createGDPS, createAndroidDownload, createPcAndroidDownload, createPcDownload } = require("./utils")
+const { createGDPS, createAndroidDownload, createPcAndroidDownload, createPcDownload, deleteGDPS } = require("./utils")
 
 var app = express()
 app.use(bp.json())
@@ -20,7 +20,8 @@ var sql_conn = mysql.createPool({
     host: config.mysql.host,
     user: config.mysql.username,
     password: config.mysql.password,
-    database: config.mysql.database
+    database: config.mysql.database,
+    charset: 'utf8mb4'
 });
 const query = util.promisify(sql_conn.query).bind(sql_conn);
 
@@ -28,7 +29,8 @@ var gdps_sql_conn = mysql.createPool({
     connectionLimit : 50,
     host: config.mysql.host,
     user: config.mysql.username,
-    password: config.mysql.password
+    password: config.mysql.password,
+    charset: 'utf8mb4'
 });
 const gdps_query = util.promisify(gdps_sql_conn.query).bind(gdps_sql_conn);
 
@@ -360,13 +362,15 @@ app.get("/gdpsmanagementperm", async (req, res) => {
     })
 })
 
-app.post("/creategdps", async (req, res) => {
-    const name = req.query["name"]
-    const custom_url = req.query["custom-url"]
-    const version = req.query["version"]
-    const user_id = req.query["user_id"]
-    const access_token = req.query["access_token"]
+app.all("/creategdps", async (req, res) => {
+    const name = req.body["name"]
+    const custom_url = req.body["custom_url"]
+    const version = req.body["version"]
+    const user_id = req.body["user_id"]
+    const access_token = req.body["access_token"]
     const password = generate_pass()
+    res.set("Access-Control-Allow-Origin", config.allow_origin);
+    res.set("Access-Control-Allow-Headers", config.allow_origin);
 
     const token_check = await is_token_valid(user_id, access_token)
     if (!token_check) {
@@ -706,6 +710,72 @@ app.all("/deletesubuser", async (req, res) => {
     })
     console.log(`${user_id} removed the subuser ${subuser_id} on the GDPS with the id ${gdps_id}.`)
 })
+
+app.all("/deletegdps", async (req, res) => {
+    const access_token = req.body["access_token"]
+    const user_id = req.body["user_id"]
+    const gdps_id = req.body["gdps_id"]
+    res.set("Access-Control-Allow-Origin", config.allow_origin);
+    res.set("Access-Control-Allow-Headers", config.allow_origin);
+    res.set("Access-Control-Allow-Methods", config.allow_origin);
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    let own_gdps = await query("select owner_id from gdps where id = ?", [gdps_id])
+    if (own_gdps.length === 0) {
+        res.send({
+            success: false,
+            message: "This GDPS doesn't exist."
+        })
+        return
+    }
+    own_gdps = own_gdps[0]
+    if (own_gdps["owner_id"] !== user_id) {
+        res.send({
+            success: false,
+            message: "Only the GDPS owner can delete the GDPS."
+        })
+        return
+    }
+    console.log(`Started deletion of the GDPS with the id ${gdps_id}.`)
+
+    let custom_url = await query("select custom_url from gdps where id = ?", [gdps_id])
+    custom_url = custom_url[0]["custom_url"]
+
+    await deleteGDPS(custom_url, gdps_id, query)
+    res.send({
+        success: true
+    })
+    console.log(`The GDPS with the id ${gdps_id} is now deleted.`)
+})
+
+// app.post("/deleteallgdpsadmin", async (req, res) => {
+//     const key = req.body["key"]
+
+//     if (key !== "sjidgvhderljgiuesliugheqrzklghjnqeryhliomytgzryg5454j6fygj26ty") {
+//         res.send("no")
+//         return
+//     }
+
+//     let custom_url = await query("select id,custom_url from gdps")
+//     for (const gdps of custom_url) {
+//         await deleteGDPS(gdps["custom_url"], gdps["id"], query)
+//     }
+//     res.send({
+//         success: true
+//     })
+// })
 
 async function is_token_valid(user_id, token) {
     const check = await query("select null from discord_oauth where user_id = ? and access_token = ?", [user_id, token])

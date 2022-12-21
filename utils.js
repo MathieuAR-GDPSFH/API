@@ -253,3 +253,17 @@ module.exports.createPcAndroidDownload = async function (custom_url, name, versi
     await exec(`rm -rf /home/gdps/GDPS_Creator/Game/Mobile/Decompiler/${custom_url}`)
     await exec(`rm /home/gdps/GDPS_Creator/Game/Mobile/Decompiler/SignAPK/${custom_url}.apk`)
 }
+
+module.exports.deleteGDPS = async function (custom_url, gdps_id, query) {
+    await query(`DROP USER 'gdps_${custom_url}'@'localhost'`)
+    await query(`DROP DATABASE gdps_${custom_url}`)
+    await exec(`rm /etc/php/7.4/fpm/pool.d/${custom_url}.conf`)
+    await exec(`rm /etc/nginx/sites-enabled/${custom_url}.conf`)
+    await exec(`rm /home/gdps/nginx_configs/${custom_url}.conf`)
+    await exec("service nginx reload")
+    await exec("systemctl reload php7.4-fpm")
+    await exec(`userdel -f gdps_${custom_url}`)
+    await exec(`rm -rf /var/www/gdps/${custom_url}`)
+    await query("delete from gdps where id = ?", [gdps_id])
+    await query("delete from subusers where gdps_id = ?", [gdps_id])
+}

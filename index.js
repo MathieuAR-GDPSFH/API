@@ -8,12 +8,14 @@ const dedent = require('dedent')
 const fs = require("fs")
 const crypto = require('crypto')
 const exec = util.promisify(require("child_process").exec);
+const cors = require('cors')
 const { createGDPS, createAndroidDownload, createPcAndroidDownload, createPcDownload, deleteGDPS } = require("./utils")
 
 var app = express()
 app.use(bp.json())
 app.use(bp.urlencoded({ extended: true }))
 app.set('trust proxy', true)
+app.use(cors())
 
 var sql_conn = mysql.createPool({
     connectionLimit : 10,
@@ -24,15 +26,6 @@ var sql_conn = mysql.createPool({
     charset: 'utf8mb4'
 });
 const query = util.promisify(sql_conn.query).bind(sql_conn);
-
-var gdps_sql_conn = mysql.createPool({
-    connectionLimit : 50,
-    host: config.mysql.host,
-    user: config.mysql.username,
-    password: config.mysql.password,
-    charset: 'utf8mb4'
-});
-const gdps_query = util.promisify(gdps_sql_conn.query).bind(gdps_sql_conn);
 
 app.post("/discord/oauth/code", async (req, res) => {
     const code = req.query["code"]
@@ -320,6 +313,111 @@ app.get("/page/gdps/management", async (req, res) => {
     res.send(req_response)
 })
 
+app.get("/page/gdps/moderators", async (req, res) => {
+    const gdps_id = req.query["gdps_id"]
+    const user_id = req.query["user_id"]
+    const access_token = req.query["access_token"]
+
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    let gdps_infos = await query("select owner_id,custom_url from gdps where id = ?", [gdps_id])
+    if (gdps_infos.length === 0) {
+        res.send({
+            success: false,
+            message: "This gdps doesn't exist."
+        })
+        return
+    }
+    gdps_infos = gdps_infos[0]
+
+    if (gdps_infos["owner_id"] !== user_id) {
+        let perm_check = await query("select perm_all,perm_managemods from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        if (perm_check.length === 0) {
+            res.send({
+                success: false,
+                message: "You don't have access to this gdps."
+            })
+            return
+        }
+        perm_check = perm_check[0]
+
+        if (perm_check["perm_managemods"] !== 1 && perm_check["perm_all"] === 0) {
+            res.send({
+                success: false,
+                message: "You don't have permission to manage moderators."
+            })
+            return
+        }
+    }
+
+    const gdps_curl = gdps_infos["custom_url"]
+    const gdps_roles = []
+    const sql_gdps_roles = await query(`select * from gdps_${gdps_curl}.roles order by priority desc`)
+    if (sql_gdps_roles.length > 0) {
+        for (const role of sql_gdps_roles) {
+            gdps_roles.push({
+                id: role["roleID"],
+                name: role["roleName"],
+                badge: role["modBadgeLevel"],
+                comment_color: role["commentColor"],
+                default: role["isDefault"],
+                permissions: []
+            })
+        }
+    }
+
+    const gdps_moderators = []
+    const gdps_moderator_ids = []
+    const sql_gdps_roleassigns = await query(`select * from gdps_${gdps_curl}.roleassign`)
+    if (sql_gdps_roleassigns.length > 0) {
+        for (const roleassign of sql_gdps_roleassigns) {
+            gdps_moderator_ids.push(roleassign["accountID"])
+        }
+
+        const sql_moderators = await query(`select userName,accountID from gdps_${gdps_curl}.accounts where accountID in (?)`, [gdps_moderator_ids])
+        for (const mod of sql_moderators) {
+            let role_id
+            let assign_id
+            let role_name
+            for (const roleassign of sql_gdps_roleassigns) {
+                if (mod["accountID"] === roleassign["accountID"]) {
+                    role_id = roleassign["roleID"]
+                    assign_id = roleassign["assignID"]
+                    break
+                }
+            }
+
+            for (const role of gdps_roles) {
+                if (role["id"] === role_id) {
+                    role_name = role["name"]
+                }
+                break
+            }
+
+            gdps_moderators.push({
+                name: mod["userName"],
+                role_name: role_name,
+                role_id: role_id,
+                assign_id: assign_id
+            })
+        }
+    }
+
+    res.send({
+        roles: gdps_roles,
+        moderators: gdps_moderators
+    })
+})
+
 app.get("/gdpsmanagementperm", async (req, res) => {
     const user_id = req.query["user_id"]
     const gdps_id = req.query["gdps_id"]
@@ -362,15 +460,13 @@ app.get("/gdpsmanagementperm", async (req, res) => {
     })
 })
 
-app.all("/creategdps", async (req, res) => {
+app.post("/creategdps", async (req, res) => {
     const name = req.body["name"]
     const custom_url = req.body["custom_url"]
     const version = req.body["version"]
     const user_id = req.body["user_id"]
     const access_token = req.body["access_token"]
     const password = generate_pass()
-    res.set("Access-Control-Allow-Origin", config.allow_origin);
-    res.set("Access-Control-Allow-Headers", config.allow_origin);
 
     const token_check = await is_token_valid(user_id, access_token)
     if (!token_check) {
@@ -511,7 +607,6 @@ app.get("/getgdpspassword", async (req, res) => {
     const access_token = req.query["access_token"]
     const user_id = req.query["user_id"]
     const gdps_id = req.query["gdps_id"]
-    res.set("Access-Control-Allow-Origin", config.allow_origin);
 
     if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
     if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
@@ -568,7 +663,7 @@ app.get("/status", async (req, res) => {
     res.send("ok")
 })
 
-app.all("/addsubuser", async (req, res) => {
+app.post("/addsubuser", async (req, res) => {
     const access_token = req.body["access_token"]
     const user_id = req.body["user_id"]
     const gdps_id = req.body["gdps_id"]
@@ -583,8 +678,6 @@ app.all("/addsubuser", async (req, res) => {
     const manageModerators = req.body["manageModerators"]
     const seeSentLevels = req.body["seeSentLevels"]
     const seeModActions = req.body["seeModActions"]
-    res.set("Access-Control-Allow-Origin", config.allow_origin);
-    res.set("Access-Control-Allow-Headers", config.allow_origin);
 
     if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
     if (user_id === subuser_id) {res.send({ success: false, message: "You can't add yourself as a subuser.." }); return}
@@ -664,13 +757,11 @@ app.all("/addsubuser", async (req, res) => {
     console.log(`${user_id} added ${subuser_id} as a subuser on the GDPS with the id ${gdps_id}.`)
 })
 
-app.all("/deletesubuser", async (req, res) => {
+app.post("/deletesubuser", async (req, res) => {
     const access_token = req.body["access_token"]
     const user_id = req.body["user_id"]
     const gdps_id = req.body["gdps_id"]
     const subuser_id = req.body["subuser_id"]
-    res.set("Access-Control-Allow-Origin", config.allow_origin);
-    res.set("Access-Control-Allow-Headers", config.allow_origin);
 
     if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
     if (subuser_id === undefined || subuser_id === "") {res.send({ success: false, message: "Subuser id required." }); return}
@@ -711,13 +802,10 @@ app.all("/deletesubuser", async (req, res) => {
     console.log(`${user_id} removed the subuser ${subuser_id} on the GDPS with the id ${gdps_id}.`)
 })
 
-app.all("/deletegdps", async (req, res) => {
+app.delete("/deletegdps", async (req, res) => {
     const access_token = req.body["access_token"]
     const user_id = req.body["user_id"]
     const gdps_id = req.body["gdps_id"]
-    res.set("Access-Control-Allow-Origin", config.allow_origin);
-    res.set("Access-Control-Allow-Headers", config.allow_origin);
-    res.set("Access-Control-Allow-Methods", config.allow_origin);
 
     if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
     if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}

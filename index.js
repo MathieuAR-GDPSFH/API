@@ -369,6 +369,7 @@ app.get("/page/gdps/moderators", async (req, res) => {
                 name: role["roleName"],
                 badge: role["modBadgeLevel"],
                 comment_color: role["commentColor"],
+                priority: role["priority"],
                 default: role["isDefault"],
                 permissions: []
             })
@@ -399,8 +400,8 @@ app.get("/page/gdps/moderators", async (req, res) => {
             for (const role of gdps_roles) {
                 if (role["id"] === role_id) {
                     role_name = role["name"]
+                    break
                 }
-                break
             }
 
             gdps_moderators.push({
@@ -848,6 +849,242 @@ app.delete("/deletegdps", async (req, res) => {
     console.log(`The GDPS with the id ${gdps_id} is now deleted.`)
 })
 
+app.post("/createRole", async (req, res) => {
+    const access_token = req.body["access_token"]
+    const user_id = req.body["user_id"]
+    const gdps_id = req.body["gdps_id"]
+    const gdps_name = req.body["gdps_name"]
+    const badge = req.body["badge"]
+    const priority = req.body["priority"]
+    let comment_color = req.body["comment_color"]
+    const rateCommand = req.body["rateCommand"]
+    const featureCommand = req.body["featureCommand"]
+    const epicCommand = req.body["epicCommand"]
+    const unEpicCommand = req.body["unEpicCommand"]
+    const verifyCoinsCommand = req.body["verifyCoinsCommand"]
+    const dailyCommand = req.body["dailyCommand"]
+    const weeklyCommand = req.body["weeklyCommand"]
+    const deleteCommand = req.body["deleteCommand"]
+    const setAccCommand = req.body["setAccCommand"]
+    const renameCommandOwn = req.body["renameCommandOwn"]
+    const renameCommandAll = req.body["renameCommandAll"]
+    const passCommandOwn = req.body["passCommandOwn"]
+    const passCommandAll = req.body["passCommandAll"]
+    const descriptionCommandOwn = req.body["descriptionCommandOwn"]
+    const descriptionCommandAll = req.body["descriptionCommandAll"]
+    const publicCommandOwn = req.body["publicCommandOwn"]
+    const publicCommandAll = req.body["publicCommandAll"]
+    const unlistCommandOwn = req.body["unlistCommandOwn"]
+    const unlistCommandAll = req.body["unlistCommandAll"]
+    const shareCpCommandOwn = req.body["shareCpCommandOwn"]
+    const shareCpCommandAll = req.body["shareCpCommandAll"]
+    const songCommandOwn = req.body["songCommandOwn"]
+    const songCommandAll = req.body["songCommandAll"]
+    const rateDemon = req.body["rateDemon"]
+    const rateStars = req.body["rateStars"]
+    const rateDifficulty = req.body["rateDifficulty"]
+    const requestMod = req.body["requestMod"]
+    const suggestRate = req.body["suggestRate"]
+    const deleteComment = req.body["deleteComment"]
+    const leaderboardBan = req.body["leaderboardBan"]
+    const createPackTool = req.body["createPackTool"]
+    const createQuestsTool = req.body["createQuestsTool"]
+    const modActionsTool = req.body["modActionsTool"]
+    const suggestListTool = req.body["suggestListTool"]
+    const dashboardModTools = req.body["dashboardModTools"]
+    const modIpCategory = req.body["modIpCategory"]
+    const profileCommandDiscord = req.body["profileCommandDiscord"]
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+    if (gdps_name === undefined || gdps_name === "") {res.send({ success: false, message: "Name is required." }); return}
+    if (badge === undefined || badge === "") {res.send({ success: false, message: "Badge is required." }); return}
+    if (comment_color === undefined) {res.send({ success: false, message: "Comment color required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    
+    if (comment_color === "") {
+        comment_color = "000,000,000"
+    } else {
+        comment_color = hexToRgb(comment_color)
+    }
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    let gdps_infos = await query("select owner_id,custom_url from gdps where id = ?", [gdps_id])
+    if (gdps_infos.length === 0) {
+        res.send({
+            success: false,
+            message: "This GDPS doesn't exist."
+        })
+        return
+    }
+    gdps_infos = gdps_infos[0]
+
+    if (gdps_infos["owner_id"] !== user_id) {
+        let perm_check = await query("select perm_all,perm_createroles from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        if (perm_check.length === 0) {
+            res.send({
+                success: false,
+                message: "You don't have access to this gdps."
+            })
+            return
+        }
+        perm_check = perm_check[0]
+
+        if (perm_check["perm_createroles"] !== 1 && perm_check["perm_all"] === 0) {
+            res.send({
+                success: false,
+                message: "You don't have permission to create roles."
+            })
+            return
+        }
+    }
+
+    await query(`insert into gdps_${gdps_infos["custom_url"]}.roles (priority,roleName,commandRate,commandFeature,commandEpic,commandUnepic,commandVerifycoins,commandDaily,commandWeekly,commandDelete,commandSetacc,commandRenameOwn,commandRenameAll,commandPassOwn,commandPassAll,commandDescriptionOwn,commandDescriptionAll,commandPublicOwn,commandPublicAll,commandUnlistOwn,commandUnlistAll,commandSharecpOwn,commandSharecpAll,commandSongOwn,commandSongAll,profilecommandDiscord,actionRateDemon,actionRateStars,actionRateDifficulty,actionRequestMod,actionSuggestRating,actionDeleteComment,toolLeaderboardsban,toolPackcreate,toolQuestsCreate,toolModactions,toolSuggestlist,dashboardModTools,modipCategory,commentColor,modBadgeLevel) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [priority, gdps_name, rateCommand, featureCommand, epicCommand, unEpicCommand, verifyCoinsCommand, dailyCommand, weeklyCommand, deleteCommand, setAccCommand, renameCommandOwn, renameCommandAll, passCommandOwn, passCommandAll, descriptionCommandOwn, descriptionCommandAll, publicCommandOwn, publicCommandAll, unlistCommandOwn, unlistCommandAll, shareCpCommandOwn, shareCpCommandAll, songCommandOwn, songCommandAll, profileCommandDiscord, rateDemon, rateStars, rateDifficulty, requestMod, suggestRate, deleteComment, leaderboardBan, createPackTool, createQuestsTool, modActionsTool, suggestListTool, dashboardModTools, modIpCategory, comment_color, badge])
+    res.send({
+        success: true
+    })
+})
+
+app.get("/getgdpsusers", async (req, res) => {
+    const access_token = req.query["access_token"]
+    const user_id = req.query["user_id"]
+    const gdps_id = req.query["gdps_id"]
+    const search_username = req.query["search_username"]
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (search_username === undefined || search_username === "") {res.send({ success: false, message: "User name search required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    let gdps_infos = await query("select owner_id,custom_url from gdps where id = ?", [gdps_id])
+    if (gdps_infos.length === 0) {
+        res.send({
+            success: false,
+            message: "This gdps doesn't exist."
+        })
+        return
+    }
+    gdps_infos = gdps_infos[0]
+
+    if (gdps_infos["owner_id"] !== user_id) {
+        let perm_check = await query("select perm_all,perm_addmod from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        if (perm_check.length === 0) {
+            res.send({
+                success: false,
+                message: "You don't have access to this gdps."
+            })
+            return
+        }
+        perm_check = perm_check[0]
+
+        if (perm_check["perm_addmod"] !== 1 && perm_check["perm_all"] === 0) {
+            res.send({
+                success: false,
+                message: "You don't have permission to add moderators."
+            })
+            return
+        }
+    }
+
+    const req_resp = []
+    const gdps_users = await query(`select userName,accountID from gdps_${gdps_infos["custom_url"]}.accounts where userName like ? limit 10`, [`%${search_username}%`])
+    for (const user of gdps_users) {
+        req_resp.push({
+            text: user["userName"],
+            id: user["accountID"]
+        })
+    }
+    res.send({
+        success: true,
+        users: req_resp
+    })
+})
+
+app.post("/addmoderator", async (req, res) => {
+    const access_token = req.body["access_token"]
+    const user_id = req.body["user_id"]
+    const gdps_id = req.body["gdps_id"]
+    const mod_id = req.body["mod_id"]
+    const role_id = req.body["role_id"]
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (mod_id === undefined || mod_id === "") {res.send({ success: false, message: "Moderator id required." }); return}
+    if (role_id === undefined || role_id === "") {res.send({ success: false, message: "Role required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    let gdps_infos = await query("select owner_id,custom_url from gdps where id = ?", [gdps_id])
+    if (gdps_infos.length === 0) {
+        res.send({
+            success: false,
+            message: "This gdps doesn't exist."
+        })
+        return
+    }
+    gdps_infos = gdps_infos[0]
+
+    if (gdps_infos["owner_id"] !== user_id) {
+        let perm_check = await query("select perm_all,perm_addmod from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        if (perm_check.length === 0) {
+            res.send({
+                success: false,
+                message: "You don't have access to this gdps."
+            })
+            return
+        }
+        perm_check = perm_check[0]
+
+        if (perm_check["perm_addmod"] !== 1 && perm_check["perm_all"] === 0) {
+            res.send({
+                success: false,
+                message: "You don't have permission to add moderators."
+            })
+            return
+        }
+    }
+
+    const mod_check = await query(`select null from gdps_${gdps_infos["custom_url"]}.roleassign where accountID = ?`, [mod_id])
+    if (mod_check.length > 0) {
+        res.send({
+            success: false,
+            message: "This user is already has a role."
+        })
+        return
+    }
+
+    await query(`insert into gdps_${gdps_infos["custom_url"]}.roleassign (roleID,accountID) values (?,?)`, [role_id, mod_id])
+    res.send({
+        success: true
+    })
+})
+
 // app.post("/deleteallgdpsadmin", async (req, res) => {
 //     const key = req.body["key"]
 
@@ -879,6 +1116,11 @@ function generate_pass() {
     const second = Math.random().toString(36).substr(2);
     return first + second;
 };
+
+function hexToRgb(hex) {
+    var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return `${parseInt(result[1], 16)},${parseInt(result[2], 16)},${parseInt(result[3], 16)}`
+  }
 
 app.listen(config.port, async function () {
     console.log("[API] Started!")

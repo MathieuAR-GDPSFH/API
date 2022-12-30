@@ -5,14 +5,14 @@ const fs = require("fs")
 
 module.exports.createGDPS = async function (custom_url, name, version, password, query) {
     var slash_count = ""
-    var mobile_folder_name = custom_url
+    let mobile_folder_name = custom_url
     if (custom_url.length < 11) {
         while (slash_count.length < 11 - custom_url.length) {
             slash_count = `${slash_count}/`
             mobile_folder_name = `${mobile_folder_name}0`
         }
     }
-    mobile_folder_name + `${mobile_folder_name}0`
+    mobile_folder_name = `${mobile_folder_name}0`
 
     await exec(`mkdir /var/www/gdps/${custom_url}`)
     await exec(`cp -r /home/gdps/GDPS_Creator/server_files/* /var/www/gdps/${custom_url}`)

@@ -9,7 +9,8 @@ const fs = require("fs")
 const crypto = require('crypto')
 const exec = util.promisify(require("child_process").exec);
 const cors = require('cors')
-const { createGDPS, createAndroidDownload, createPcAndroidDownload, createPcDownload, deleteGDPS } = require("./utils")
+const {IP2Proxy} = require("ip2proxy-nodejs");
+const { createGDPS, createAndroidDownload, createPcAndroidDownload, createPcDownload, deleteGDPS, forceDeleteGDPS } = require("./utils")
 
 var app = express()
 app.use(bp.json())
@@ -26,9 +27,27 @@ var sql_conn = mysql.createPool({
     charset: 'utf8mb4'
 });
 const query = util.promisify(sql_conn.query).bind(sql_conn);
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+let ip2proxy = new IP2Proxy();
 
 app.post("/discord/oauth/code", async (req, res) => {
     const code = req.query["code"]
+    const ip = req.query["ip"]
+
+    const is_vpn = checkVpnIp(ip)
+    if (is_vpn === "error") {
+        res.send({
+            success: false,
+            message: "An internal error occured"
+        })
+        return
+    } else if (is_vpn === 1) {
+        res.send({
+            success: false,
+            message: "No VPN allowed."
+        })
+        return
+    }
     
     let req_config = {
         url: "https://discord.com/api/oauth2/token",
@@ -50,7 +69,10 @@ app.post("/discord/oauth/code", async (req, res) => {
         const api_req = await axios(req_config)
         oauth_data = api_req.data
     } catch (err) {
-        res.send("err")
+        res.send({
+            success: false,
+            message: "An error occured while trying to contact the discord API."
+        })
         return
     }
 
@@ -67,7 +89,10 @@ app.post("/discord/oauth/code", async (req, res) => {
         const api_req = await axios(req_config)
         user_data = api_req.data
     } catch (err) {
-        res.send("err")
+        res.send({
+            success: false,
+            message: "An error occured while trying to contact the discord API."
+        })
         return
     }
 
@@ -75,6 +100,7 @@ app.post("/discord/oauth/code", async (req, res) => {
     const access_token = crypto.randomBytes(64).toString('hex')
 
     const req_response = {
+        success: true,
         user_id: user_data["id"],
         username: user_data["username"],
         avatar: avatar,
@@ -85,9 +111,9 @@ app.post("/discord/oauth/code", async (req, res) => {
     var sql_data = await query("select role from discord_oauth where user_id = ?", [user_data["id"]])
     if (sql_data.length === 0) {
         const current_time = Math.floor(Date.now() / 1000)
-        await query("insert into discord_oauth (user_id,name,avatar,token,token_expire,refresh_token,created_on,access_token) values (?,?,?,?,?,?,?,?)", [user_data["id"], user_data["username"], avatar, oauth_data["access_token"], current_time + oauth_data["expires_in"], oauth_data["refresh_token"], current_time, access_token])
+        await query("insert into discord_oauth (user_id,name,avatar,token,token_expire,refresh_token,created_on,ip,access_token) values (?,?,?,?,?,?,?,?,?)", [user_data["id"], user_data["username"], avatar, oauth_data["access_token"], current_time + oauth_data["expires_in"], oauth_data["refresh_token"], current_time, ip, access_token])
     } else if (sql_data.length === 1) {
-        await query("update discord_oauth set name = ?, avatar = ?, access_token = ? where user_id = ?", [user_data["username"], avatar, access_token, user_data["id"]])
+        await query("update discord_oauth set name = ?, avatar = ?, access_token = ?, ip = ? where user_id = ?", [user_data["username"], avatar, access_token, ip, user_data["id"]])
 
         sql_data = sql_data[0]
         if (sql_data["role"] !== 0) {
@@ -218,7 +244,7 @@ app.get("/page/gdps/management", async (req, res) => {
     }
 
     const subusers = []
-    const sql_subusers = await query("select user_id,perm_all,perm_management,perm_levels,perm_mappacks,perm_gauntlets,perm_quests,perm_users,perm_managemods,perm_seesentlevels,perm_seemodactions from subusers where gdps_id = ?", [gdps_id])
+    const sql_subusers = await query("select user_id,perm_all,perm_copygdpspass,perm_levels,perm_mappacks,perm_gauntlets,perm_quests,perm_users,perm_managemods,perm_seesentlevels,perm_seemodactions,perm_manageroles from subusers where gdps_id = ?", [gdps_id])
     for (const subuser of sql_subusers) {
         const user_data = {
             user_id: subuser["user_id"],
@@ -243,9 +269,15 @@ app.get("/page/gdps/management", async (req, res) => {
                             color: "danger"
                         })
                         break perm_loop
-                    } case "perm_management": {
+                    } case "perm_copygdpspass": {
                         user_data["permissions"].push({
-                            name: "Management page",
+                            name: "Copy GDPS password",
+                            color: "danger"
+                        })
+                        break
+                    } case "perm_manageroles": {
+                        user_data["permissions"].push({
+                            name: "Manage GDPS roles",
                             color: "danger"
                         })
                         break
@@ -499,7 +531,7 @@ app.post("/creategdps", async (req, res) => {
 
     var re = new RegExp(/^[a-zA-Z0-9]{1,20}$/);
     if (!re.test(name)) {
-        res.send({ success: false, message: "Invalid name, please make sure that there are no special characters un the URL." })
+        res.send({ success: false, message: "Invalid name, please make sure that there are no special characters and no spaces un the name." })
         return
     }
     var re = new RegExp(/^[a-zA-Z][a-zA-Z0-9]{1,11}$/);
@@ -565,7 +597,7 @@ app.post("/creategdps", async (req, res) => {
     listen = /var/run/php/${custom_url}.sock
     listen.owner = www-data
     listen.group = www-data
-    php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source,dl,setenv
+    php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,curl_multi_exec,parse_ini_file,show_source,dl,setenv
     php_admin_value[open_basedir] = /var/www/gdps/${custom_url}
     php_admin_flag[allow_url_fopen] = off
     pm = dynamic
@@ -581,7 +613,7 @@ app.post("/creategdps", async (req, res) => {
     res.send({success: true})
 
     console.log(`Creating a new GDPS named ${name}.`)
-    await createGDPS(custom_url, name, version, password, query)
+    await createGDPS(custom_url, password, query)
     await exec(`ln -s /home/gdps/nginx_configs/${custom_url}.conf /etc/nginx/sites-enabled/`)
     await exec("service nginx reload")
     await exec("service php7.4-fpm reload")
@@ -633,7 +665,7 @@ app.get("/getgdpspassword", async (req, res) => {
     gdps_infos = gdps_infos[0]
 
     if (gdps_infos["owner_id"] !== user_id) {
-        let perm_check = await query("select perm_all,perm_management from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        let perm_check = await query("select perm_all,perm_copygdpspass from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
         if (perm_check.length === 0) {
             res.send({
                 success: false,
@@ -643,7 +675,7 @@ app.get("/getgdpspassword", async (req, res) => {
         }
         perm_check = perm_check[0]
 
-        if (perm_check["perm_management"] !== 1 && perm_check["perm_all"] === 0) {
+        if (perm_check["perm_copygdpspass"] !== 1 && perm_check["perm_all"] === 0) {
             res.send({
                 success: false,
                 message: "You don't have permission to copy the password."
@@ -670,7 +702,7 @@ app.post("/addsubuser", async (req, res) => {
     const gdps_id = req.body["gdps_id"]
     const subuser_id = req.body["subuser_id"]
     const allPerms = req.body["allPerms"]
-    const managementPerm = req.body["managementPerm"]
+    const copyPass = req.body["copyPass"]
     const manageLevels = req.body["manageLevels"]
     const manageMapPacks = req.body["manageMapPacks"]
     const manageGauntlets = req.body["manageGauntlets"]
@@ -679,6 +711,7 @@ app.post("/addsubuser", async (req, res) => {
     const manageModerators = req.body["manageModerators"]
     const seeSentLevels = req.body["seeSentLevels"]
     const seeModActions = req.body["seeModActions"]
+    const manageRoles = req.body["manageRoles"]
 
     if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
     if (user_id === subuser_id) {res.send({ success: false, message: "You can't add yourself as a subuser.." }); return}
@@ -686,7 +719,7 @@ app.post("/addsubuser", async (req, res) => {
     if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
     if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
     if (!Number.isInteger(allPerms) || allPerms > 1 || allPerms < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
-    if (!Number.isInteger(managementPerm) || managementPerm > 1 || managementPerm < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(copyPass) || copyPass > 1 || copyPass < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
     if (!Number.isInteger(manageLevels) || manageLevels > 1 || manageLevels < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
     if (!Number.isInteger(manageMapPacks) || manageMapPacks > 1 || manageMapPacks < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
     if (!Number.isInteger(manageGauntlets) || manageGauntlets > 1 || manageGauntlets < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
@@ -695,6 +728,8 @@ app.post("/addsubuser", async (req, res) => {
     if (!Number.isInteger(manageModerators) || manageModerators > 1 || manageModerators < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
     if (!Number.isInteger(seeSentLevels) || seeSentLevels > 1 || seeSentLevels < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
     if (!Number.isInteger(seeModActions) || seeModActions > 1 || seeModActions < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    if (!Number.isInteger(manageRoles) || manageRoles > 1 || manageRoles < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
+    console.log(manageRoles)
 
     const token_check = await is_token_valid(user_id, access_token)
     if (!token_check) {
@@ -707,7 +742,7 @@ app.post("/addsubuser", async (req, res) => {
 
     if (
         allPerms === 0 &&
-        managementPerm === 0 &&
+        copyPass === 0 &&
         manageLevels === 0 &&
         manageMapPacks === 0 &&
         manageGauntlets === 0 &&
@@ -715,7 +750,8 @@ app.post("/addsubuser", async (req, res) => {
         manageUsers === 0 &&
         manageModerators === 0 &&
         seeSentLevels === 0 &&
-        seeModActions === 0
+        seeModActions === 0 &&
+        manageRoles === 0
     ) {
         res.send({
             success: false,
@@ -751,7 +787,7 @@ app.post("/addsubuser", async (req, res) => {
         return
     }
 
-    await query("insert into subusers (gdps_id,user_id,perm_all,perm_management,perm_levels,perm_mappacks,perm_gauntlets,perm_quests,perm_users,perm_managemods,perm_seesentlevels,perm_seemodactions) values (?,?,?,?,?,?,?,?,?,?,?,?)", [gdps_id, subuser_id, allPerms, managementPerm, manageLevels, manageMapPacks, manageGauntlets, manageQuests, manageUsers, manageModerators, seeSentLevels, seeModActions])
+    await query("insert into subusers (gdps_id,user_id,perm_all,perm_copygdpspass,perm_levels,perm_mappacks,perm_gauntlets,perm_quests,perm_users,perm_managemods,perm_seesentlevels,perm_seemodactions,perm_manageroles) values (?,?,?,?,?,?,?,?,?,?,?,?,?)", [gdps_id, subuser_id, allPerms, copyPass, manageLevels, manageMapPacks, manageGauntlets, manageQuests, manageUsers, manageModerators, seeSentLevels, seeModActions, manageRoles])
     res.send({
         success: true
     })
@@ -830,6 +866,7 @@ app.delete("/deletegdps", async (req, res) => {
         return
     }
     own_gdps = own_gdps[0]
+
     if (own_gdps["owner_id"] !== user_id) {
         res.send({
             success: false,
@@ -855,7 +892,7 @@ app.post("/createRole", async (req, res) => {
     const gdps_id = req.body["gdps_id"]
     const gdps_name = req.body["gdps_name"]
     const badge = req.body["badge"]
-    const priority = req.body["priority"]
+    let priority = req.body["priority"]
     let comment_color = req.body["comment_color"]
     const rateCommand = req.body["rateCommand"]
     const featureCommand = req.body["featureCommand"]
@@ -901,8 +938,12 @@ app.post("/createRole", async (req, res) => {
     if (gdps_name === undefined || gdps_name === "") {res.send({ success: false, message: "Name is required." }); return}
     if (badge === undefined || badge === "") {res.send({ success: false, message: "Badge is required." }); return}
     if (comment_color === undefined) {res.send({ success: false, message: "Comment color required." }); return}
-    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
-    
+    if (priority === undefined || priority === "") {res.send({ success: false, message: "Priority is required." }); return}
+    priority = Number(priority)
+    if (!Number.isInteger(priority)) {res.send({ success: false, message: "Priority has to be a number." }); return}
+    if (priority > 11) {res.send({ success: false, message: "Priority can't be over 11 numbers." }); return}
+    if (gdps_name.length > 50) {res.send({ success: false, message: "Name can't be over 50 Characters." }); return}
+
     if (comment_color === "") {
         comment_color = "000,000,000"
     } else {
@@ -929,7 +970,7 @@ app.post("/createRole", async (req, res) => {
     gdps_infos = gdps_infos[0]
 
     if (gdps_infos["owner_id"] !== user_id) {
-        let perm_check = await query("select perm_all,perm_createroles from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        let perm_check = await query("select perm_all,perm_manageroles from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
         if (perm_check.length === 0) {
             res.send({
                 success: false,
@@ -939,7 +980,7 @@ app.post("/createRole", async (req, res) => {
         }
         perm_check = perm_check[0]
 
-        if (perm_check["perm_createroles"] !== 1 && perm_check["perm_all"] === 0) {
+        if (perm_check["perm_manageroles"] !== 1 && perm_check["perm_all"] === 0) {
             res.send({
                 success: false,
                 message: "You don't have permission to create roles."
@@ -949,6 +990,63 @@ app.post("/createRole", async (req, res) => {
     }
 
     await query(`insert into gdps_${gdps_infos["custom_url"]}.roles (priority,roleName,commandRate,commandFeature,commandEpic,commandUnepic,commandVerifycoins,commandDaily,commandWeekly,commandDelete,commandSetacc,commandRenameOwn,commandRenameAll,commandPassOwn,commandPassAll,commandDescriptionOwn,commandDescriptionAll,commandPublicOwn,commandPublicAll,commandUnlistOwn,commandUnlistAll,commandSharecpOwn,commandSharecpAll,commandSongOwn,commandSongAll,profilecommandDiscord,actionRateDemon,actionRateStars,actionRateDifficulty,actionRequestMod,actionSuggestRating,actionDeleteComment,toolLeaderboardsban,toolPackcreate,toolQuestsCreate,toolModactions,toolSuggestlist,dashboardModTools,modipCategory,commentColor,modBadgeLevel) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [priority, gdps_name, rateCommand, featureCommand, epicCommand, unEpicCommand, verifyCoinsCommand, dailyCommand, weeklyCommand, deleteCommand, setAccCommand, renameCommandOwn, renameCommandAll, passCommandOwn, passCommandAll, descriptionCommandOwn, descriptionCommandAll, publicCommandOwn, publicCommandAll, unlistCommandOwn, unlistCommandAll, shareCpCommandOwn, shareCpCommandAll, songCommandOwn, songCommandAll, profileCommandDiscord, rateDemon, rateStars, rateDifficulty, requestMod, suggestRate, deleteComment, leaderboardBan, createPackTool, createQuestsTool, modActionsTool, suggestListTool, dashboardModTools, modIpCategory, comment_color, badge])
+    res.send({
+        success: true
+    })
+})
+
+app.delete("/deleterole", async (req, res) => {
+    const access_token = req.body["access_token"]
+    const user_id = req.body["user_id"]
+    const gdps_id = req.body["gdps_id"]
+    const role_id = req.body["role_id"]
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (role_id === undefined || role_id === "") {res.send({ success: false, message: "Role id required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    let gdps_infos = await query("select owner_id,custom_url from gdps where id = ?", [gdps_id])
+    if (gdps_infos.length === 0) {
+        res.send({
+            success: false,
+            message: "This gdps doesn't exist."
+        })
+        return
+    }
+    gdps_infos = gdps_infos[0]
+
+    if (gdps_infos["owner_id"] !== user_id) {
+        let perm_check = await query("select perm_all,perm_manageroles from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        if (perm_check.length === 0) {
+            res.send({
+                success: false,
+                message: "You don't have access to this gdps."
+            })
+            return
+        }
+        perm_check = perm_check[0]
+
+        if (perm_check["perm_manageroles"] !== 1 && perm_check["perm_all"] === 0) {
+            res.send({
+                success: false,
+                message: "You don't have permission to delete roles."
+            })
+            return
+        }
+    }
+
+    await query(`delete from gdps_${gdps_infos["custom_url"]}.roles where roleID = ?`, [role_id])
+    await query(`delete from gdps_${gdps_infos["custom_url"]}.roleassign where roleID = ?`, [role_id])
     res.send({
         success: true
     })
@@ -985,7 +1083,7 @@ app.get("/getgdpsusers", async (req, res) => {
     gdps_infos = gdps_infos[0]
 
     if (gdps_infos["owner_id"] !== user_id) {
-        let perm_check = await query("select perm_all,perm_addmod from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        let perm_check = await query("select perm_all,perm_managemods from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
         if (perm_check.length === 0) {
             res.send({
                 success: false,
@@ -995,7 +1093,7 @@ app.get("/getgdpsusers", async (req, res) => {
         }
         perm_check = perm_check[0]
 
-        if (perm_check["perm_addmod"] !== 1 && perm_check["perm_all"] === 0) {
+        if (perm_check["perm_managemods"] !== 1 && perm_check["perm_all"] === 0) {
             res.send({
                 success: false,
                 message: "You don't have permission to add moderators."
@@ -1051,7 +1149,7 @@ app.post("/addmoderator", async (req, res) => {
     gdps_infos = gdps_infos[0]
 
     if (gdps_infos["owner_id"] !== user_id) {
-        let perm_check = await query("select perm_all,perm_addmod from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        let perm_check = await query("select perm_all,perm_managemods from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
         if (perm_check.length === 0) {
             res.send({
                 success: false,
@@ -1061,7 +1159,7 @@ app.post("/addmoderator", async (req, res) => {
         }
         perm_check = perm_check[0]
 
-        if (perm_check["perm_addmod"] !== 1 && perm_check["perm_all"] === 0) {
+        if (perm_check["perm_managemods"] !== 1 && perm_check["perm_all"] === 0) {
             res.send({
                 success: false,
                 message: "You don't have permission to add moderators."
@@ -1080,6 +1178,240 @@ app.post("/addmoderator", async (req, res) => {
     }
 
     await query(`insert into gdps_${gdps_infos["custom_url"]}.roleassign (roleID,accountID) values (?,?)`, [role_id, mod_id])
+    res.send({
+        success: true
+    })
+})
+
+app.delete("/removemoderator", async (req, res) => {
+    const access_token = req.body["access_token"]
+    const user_id = req.body["user_id"]
+    const gdps_id = req.body["gdps_id"]
+    const assign_id = req.body["assign_id"]
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (assign_id === undefined || assign_id === "") {res.send({ success: false, message: "Moderator id required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    let gdps_infos = await query("select owner_id,custom_url from gdps where id = ?", [gdps_id])
+    if (gdps_infos.length === 0) {
+        res.send({
+            success: false,
+            message: "This gdps doesn't exist."
+        })
+        return
+    }
+    gdps_infos = gdps_infos[0]
+
+    if (gdps_infos["owner_id"] !== user_id) {
+        let perm_check = await query("select perm_all,perm_managemods from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        if (perm_check.length === 0) {
+            res.send({
+                success: false,
+                message: "You don't have access to this gdps."
+            })
+            return
+        }
+        perm_check = perm_check[0]
+
+        if (perm_check["perm_managemods"] !== 1 && perm_check["perm_all"] === 0) {
+            res.send({
+                success: false,
+                message: "You don't have permission to remove moderators."
+            })
+            return
+        }
+    }
+
+    await query(`delete from gdps_${gdps_infos["custom_url"]}.roleassign where assignID = ?`, [assign_id])
+    res.send({
+        success: true
+    })
+})
+
+app.get("/getpcdownload", async (req, res) => {
+    const access_token = req.query["access_token"]
+    const user_id = req.query["user_id"]
+    const gdps_id = req.query["gdps_id"]
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    let gdps_infos = await query("select owner_id,custom_url,name,version from gdps where id = ?", [gdps_id])
+    if (gdps_infos.length === 0) {
+        res.send({
+            success: false,
+            message: "This gdps doesn't exist."
+        })
+        return
+    }
+    gdps_infos = gdps_infos[0]
+
+    if (gdps_infos["owner_id"] !== user_id) {
+        let perm_check = await query("select null from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        if (perm_check.length === 0) {
+            res.send({
+                success: false,
+                message: "You don't have access to this gdps."
+            })
+            return
+        }
+    }
+
+    const on_cooldown = await cooldown_check(user_id, `getdl-pc-${gdps_id}`, 1800)
+    if (on_cooldown[0] === true) {
+        var minutes = Math.floor(on_cooldown[1] / 60);
+        var seconds = on_cooldown[1] % 60;
+
+        var output
+        if (minutes === 0) {
+            output = `${seconds} seconds`
+        } else {
+            output = `${minutes} minutes and ${seconds} seconds`
+        }
+
+        res.send({
+            success: false,
+            message: `PC generation on cooldown, you can use it again in ${output}`
+        })
+        return
+    }
+
+    await createPcDownload(gdps_infos["custom_url"], gdps_infos["name"], gdps_infos["version"])
+    res.send({
+        success: true,
+        download: `https://download.fhgdps.com/${gdps_infos["custom_url"]}/${gdps_infos["name"]}.zip`
+    })
+
+    await delay(300 * 1000)
+    await exec(`rm -rf /home/gdps/downloads/${gdps_infos["custom_url"]}/${gdps_infos["name"]}.zip`)
+})
+
+app.get("/getandroiddownload", async (req, res) => {
+    const access_token = req.query["access_token"]
+    const user_id = req.query["user_id"]
+    const gdps_id = req.query["gdps_id"]
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    let gdps_infos = await query("select owner_id,custom_url,name,version from gdps where id = ?", [gdps_id])
+    if (gdps_infos.length === 0) {
+        res.send({
+            success: false,
+            message: "This gdps doesn't exist."
+        })
+        return
+    }
+    gdps_infos = gdps_infos[0]
+
+    if (gdps_infos["owner_id"] !== user_id) {
+        let perm_check = await query("select null from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+        if (perm_check.length === 0) {
+            res.send({
+                success: false,
+                message: "You don't have access to this gdps."
+            })
+            return
+        }
+    }
+
+    const on_cooldown = await cooldown_check(user_id, `getdl-android-${gdps_id}`, 1800)
+    if (on_cooldown[0] === true) {
+        var minutes = Math.floor(on_cooldown[1] / 60);
+        var seconds = on_cooldown[1] % 60;
+
+        var output
+        if (minutes === 0) {
+            output = `${seconds} seconds`
+        } else {
+            output = `${minutes} minutes and ${seconds} seconds`
+        }
+
+        res.send({
+            success: false,
+            message: `Android generation on cooldown, you can use it again in ${output}`
+        })
+        return
+    }
+
+    await createAndroidDownload(gdps_infos["custom_url"], gdps_infos["name"], gdps_infos["version"])
+    res.send({
+        success: true,
+        download: `https://download.fhgdps.com/${gdps_infos["custom_url"]}/${gdps_infos["name"]}.apk`
+    })
+
+    await delay(300 * 1000)
+    await exec(`rm -rf /home/gdps/downloads/${gdps_infos["custom_url"]}/${gdps_infos["name"]}.apk`)
+})
+
+app.delete("/forcedeletegdps", async (req, res) => {
+    const access_token = req.query["access_token"]
+    const user_id = req.query["user_id"]
+    const gdps_id = req.query["gdps_id"]
+
+    if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+    if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+    if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    if (user_id !== "195598321501470720") {
+        res.send({
+            success: false,
+            message: "You don't have permission to do this."
+        })
+        return
+    }
+
+    let gdps_infos = await query("select id,custom_url from gdps where id = ?", [gdps_id])
+    if (gdps_infos.length === 0) {
+        res.send({
+            success: false,
+            message: "This gdps doesn't exist."
+        })
+        return
+    }
+    gdps_infos = gdps_infos[0]
+
+    await forceDeleteGDPS(gdps_infos["custom_url"], gdps_infos["id"], query)
     res.send({
         success: true
     })
@@ -1120,7 +1452,33 @@ function generate_pass() {
 function hexToRgb(hex) {
     var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return `${parseInt(result[1], 16)},${parseInt(result[2], 16)},${parseInt(result[3], 16)}`
-  }
+}
+
+async function cooldown_check(user_id, cooldown_type, cooldown_length) {
+    const cooldown_check = await query("select timestamp from cooldowns where user_id = ? and type = ?", [user_id, cooldown_type])
+    const current_time = Math.floor(Date.now() / 1000)
+    if (cooldown_check.length === 0) {
+        await query("insert into cooldowns (user_id, type, timestamp) values (?,?,?)", [user_id, cooldown_type, current_time])
+        return false
+    }
+
+    const user_cooldown = cooldown_check[0]["timestamp"]
+    if (user_cooldown + cooldown_length > current_time) {
+        return [true, user_cooldown + cooldown_length - current_time]
+    }
+    await query("update cooldowns set timestamp = ? where user_id = ? and type = ?", [current_time, user_id, cooldown_type])
+    return [false]
+}
+
+function checkVpnIp(ip) {
+    if (ip2proxy.open("./vpn_detector.bin") == 0) {
+        return ip2proxy.isProxy(ip)
+    } else {
+        console.log("Error reading BIN file.");
+    }
+    ip2proxy.close();
+    return "error"
+}
 
 app.listen(config.port, async function () {
     console.log("[API] Started!")

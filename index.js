@@ -10,7 +10,7 @@ const crypto = require('crypto')
 const exec = util.promisify(require("child_process").exec);
 const cors = require('cors')
 const {IP2Proxy} = require("ip2proxy-nodejs");
-const { createGDPS, createAndroidDownload, createPcAndroidDownload, createPcDownload, deleteGDPS, forceDeleteGDPS } = require("./utils")
+const { createGDPS, createAndroidDownload, createPcDownload, deleteGDPS, forceDeleteGDPS } = require("./utils")
 
 var app = express()
 app.use(bp.json())
@@ -203,15 +203,8 @@ app.get("/page/mygdps", async (req, res) => {
         }
         const managed_gdps = await query("select id,name,created_on,status,owner_id from gdps where id in (?)", [gdps_ids])
         for (const gdps of managed_gdps) {
-            const req_config = {
-                url: `https://discord.com/api/users/${gdps["owner_id"]}`,
-                method: "get",
-                headers: {
-                    "Authorization": `Bot ${config.bot_token}`
-                }
-            }
-            let user_infos = await axios(req_config)
-            user_infos = user_infos.data
+            let user = await query("select name from discord_oauth where user_id = ?", [gdps["owner_id"]])
+            user = user[0]
 
             gdps_list.push({
                 id: gdps["id"],
@@ -219,7 +212,7 @@ app.get("/page/mygdps", async (req, res) => {
                 created_on: gdps["created_on"],
                 status: gdps["status"],
                 role: "Subuser",
-                username: user_infos["username"]
+                username: user["name"]
             })
         }
     }
@@ -251,7 +244,6 @@ app.get("/page/gdps/management", async (req, res) => {
             user_name: "No name set",
             permissions: []
         }
-        console.log(subuser["user_id"])
 
         const user_name = await query("select name from discord_oauth where user_id = ?", [subuser["user_id"]])
         if (user_name[0]["name"] !== "") {
@@ -621,21 +613,6 @@ app.post("/creategdps", async (req, res) => {
     console.log(`Finished the creation of the GDPS named ${name}.`)
 })
 
-app.post("/createdl", async (req, res) => {
-    const api_key = req.body["key"]
-    const name = req.body["name"]
-    const curl = req.body["curl"]
-    const version = req.body["version"]
-    if (api_key !== "F8fY5CQ6q5Bnc986igTR4n") {
-        res.send("no")
-        return
-    }
-
-    res.send("ok")
-    await createAndroidDownload(curl, name, version)
-    console.log("finished")
-})
-
 app.get("/getgdpspassword", async (req, res) => {
     const access_token = req.query["access_token"]
     const user_id = req.query["user_id"]
@@ -729,7 +706,6 @@ app.post("/addsubuser", async (req, res) => {
     if (!Number.isInteger(seeSentLevels) || seeSentLevels > 1 || seeSentLevels < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
     if (!Number.isInteger(seeModActions) || seeModActions > 1 || seeModActions < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
     if (!Number.isInteger(manageRoles) || manageRoles > 1 || manageRoles < 0) {res.send({ success: false, message: "Wrong or missing permission." }); return}
-    console.log(manageRoles)
 
     const token_check = await is_token_valid(user_id, access_token)
     if (!token_check) {
@@ -1447,7 +1423,7 @@ function generate_pass() {
     const first = Math.random().toString(36).substr(2);
     const second = Math.random().toString(36).substr(2);
     return first + second;
-};
+}
 
 function hexToRgb(hex) {
     var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -1479,6 +1455,10 @@ function checkVpnIp(ip) {
     ip2proxy.close();
     return "error"
 }
+
+process.on("uncaughtException", err => {
+    console.log('Caught exception: ' + err.stack);
+})
 
 app.listen(config.port, async function () {
     console.log("[API] Started!")

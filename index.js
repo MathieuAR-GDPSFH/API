@@ -1393,6 +1393,54 @@ app.delete("/forcedeletegdps", async (req, res) => {
     })
 })
 
+app.post("/resetallpass", async (req, res) => {
+    const key = req.query["key"]
+    const access_token = req.query["access_token"]
+    const user_id = req.query["user_id"]
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    if (user_id !== "195598321501470720" && user_id !== "180790976128745472") {
+        res.send("no")
+        return
+    }
+
+    if (key !== config.api_keys.reset_all_pass) {
+        res.send("no")
+        return
+    }
+
+    const all_gdps = await query("select custom_url from gdps")
+    for (const gdps of all_gdps) {
+        const custom_url = gdps["custom_url"]
+        const password = generate_pass()
+        const config = dedent`<?php
+                              $servername = "127.0.0.1";
+                              $port = 3306;
+                              $username = "gdps_${custom_url}";
+                              $password = "${password}";
+                              $dbname = "gdps_${custom_url}";
+                              ?>`
+
+        try {
+            fs.writeFileSync(`/var/www/gdps/${custom_url}/config/connection.php`, config, { flag: 'w' });
+        } catch {}
+        await query(`alter user 'gdps_${custom_url}'@'localhost' identified by '${password}'`)
+        await exec(`usermod --password $(echo ${password} | openssl passwd -1 -stdin) gdps_${custom_url}`)
+    }
+
+    res.send({
+        success: true
+    })
+})
+
 // app.post("/deleteallgdpsadmin", async (req, res) => {
 //     const key = req.body["key"]
 

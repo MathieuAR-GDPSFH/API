@@ -443,6 +443,48 @@ app.get("/page/gdps/moderators", async (req, res) => {
     })
 })
 
+// app.get("/page/gdps/dashboard", async (req, res) => {
+//     const access_token = req.query["access_token"]
+//     const user_id = req.query["user_id"]
+//     const gdps_id = req.query["gdps_id"]
+
+//     if (user_id === undefined || user_id === "") {res.send({ success: false, message: "User id required." }); return}
+//     if (gdps_id === undefined || gdps_id === "") {res.send({ success: false, message: "GDPS id required." }); return}
+//     if (access_token === undefined || access_token === "") {res.send({ success: false, message: "Access token required." }); return}
+
+//     const token_check = await is_token_valid(user_id, access_token)
+//     if (!token_check) {
+//         res.send({
+//             success: false,
+//             message: "Token check failed."
+//         })
+//         return
+//     }
+
+//     let gdps_infos = await query("select owner_id from gdps where id = ?", [gdps_id])
+//     if (gdps_infos.length === 0) {
+//         res.send({
+//             success: false,
+//             message: "This gdps doesn't exist."
+//         })
+//         return
+//     }
+//     gdps_infos = gdps_infos[0]
+
+//     if (gdps_infos["owner_id"] !== user_id) {
+//         const perm_check = await query("select null from subusers where user_id = ? and gdps_id = ?", [user_id, gdps_id])
+//         if (perm_check.length === 0) {
+//             res.send({
+//                 success: false,
+//                 message: "You don't have access to this gdps."
+//             })
+//             return
+//         }
+//     }
+
+    
+// })
+
 app.get("/gdpsmanagementperm", async (req, res) => {
     const user_id = req.query["user_id"]
     const gdps_id = req.query["gdps_id"]
@@ -917,7 +959,7 @@ app.post("/createRole", async (req, res) => {
     if (priority === undefined || priority === "") {res.send({ success: false, message: "Priority is required." }); return}
     priority = Number(priority)
     if (!Number.isInteger(priority)) {res.send({ success: false, message: "Priority has to be a number." }); return}
-    if (priority > 11) {res.send({ success: false, message: "Priority can't be over 11 numbers." }); return}
+    if (priority.length > 11) {res.send({ success: false, message: "Priority can't be over 11 numbers." }); return}
     if (gdps_name.length > 50) {res.send({ success: false, message: "Name can't be over 50 Characters." }); return}
 
     if (comment_color === "") {

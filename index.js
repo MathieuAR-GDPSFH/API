@@ -1459,7 +1459,7 @@ app.post("/resetallpass", async (req, res) => {
         return
     }
 
-    const all_gdps = await query("select custom_url from gdps")
+    const all_gdps = await query("select id,custom_url from gdps")
     for (const gdps of all_gdps) {
         const custom_url = gdps["custom_url"]
         const password = generate_pass()
@@ -1475,6 +1475,7 @@ app.post("/resetallpass", async (req, res) => {
             fs.writeFileSync(`/var/www/gdps/${custom_url}/config/connection.php`, config, { flag: 'w' });
         } catch {}
         await query(`alter user 'gdps_${custom_url}'@'localhost' identified by '${password}'`)
+        await query("update gdps set password = ? where id = ?", [password, gdps["id"]])
         await exec(`usermod --password $(echo ${password} | openssl passwd -1 -stdin) gdps_${custom_url}`)
     }
 

@@ -1483,6 +1483,59 @@ app.post("/resetallpass", async (req, res) => {
     })
 })
 
+app.post("/resetallfpmconfig", async (req, res) => {
+    const key = req.query["key"]
+    const access_token = req.query["access_token"]
+    const user_id = req.query["user_id"]
+
+    const token_check = await is_token_valid(user_id, access_token)
+    if (!token_check) {
+        res.send({
+            success: false,
+            message: "Token check failed."
+        })
+        return
+    }
+
+    if (user_id !== "195598321501470720" && user_id !== "180790976128745472") {
+        res.send("no")
+        return
+    }
+
+    if (key !== config.api_keys.reset_all_fpm_configs) {
+        res.send("no")
+        return
+    }
+
+    const all_gdps = await query("select custom_url from gdps")
+    for (const gdps of all_gdps) {
+        const custom_url = gdps["custom_url"]
+        const fpm_config_content = dedent`
+        [${custom_url}]
+        user = gdps_${custom_url}
+        group = gdps_${custom_url}
+        listen = /var/run/php/${custom_url}.sock
+        listen.owner = www-data
+        listen.group = www-data
+        php_admin_value[open_basedir] = /var/www/gdps/${custom_url}
+        php_admin_flag[allow_url_fopen] = off
+        pm = dynamic
+        pm.max_children = 5
+        pm.start_servers = 2
+        pm.min_spare_servers = 1
+        pm.max_spare_servers = 3
+        chdir = /var/www/gdps/${custom_url}/
+        `
+
+        fs.writeFileSync(`/etc/php/7.4/fpm/pool.d/${custom_url}.conf`, fpm_config_content, { flag: "w" });
+    }
+    await exec("service php7.4-fpm reload")
+
+    res.send({
+        success: true
+    })
+})
+
 // app.post("/deleteallgdpsadmin", async (req, res) => {
 //     const key = req.body["key"]
 
